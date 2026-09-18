@@ -16,6 +16,9 @@ Generated Test specifications (*.JSON) will be used to generate CAPL Scripts.
 - `SystemPrompt`: This folder contain system prompts which are used to transform SW requirements into Test specification based on the domain.
 - `ChromaDB`: This folder contain generated Embedded which will be feed as input for CAPL Generation.
 
+## Tool Requirements
+All preresquites will be updated soon.
+
 ## 📊 Example Workflow
 1. **Input:** "SW Requirements like Generate Sequence for a successful software download Request starting from Default Session."
 2. **Agent Reasoning:** Validates the transition from `0x10 0x01` -> `0x10 0x03` -> `0x27` -> `0x34`.
@@ -26,8 +29,10 @@ Generated Test specifications (*.JSON) will be used to generate CAPL Scripts.
 - [x] CAPL Generation architecture from SW Requirements.
 - [x] Concept splitted into three phases. First Phase, CAPL Generation from user query; Second Phase, Test Specification generation from SW requirements; Final Phase, Integration of both Phase 1 and 2.
 - [x] Phase 1: CAPL Code generation from User query
-- [ ] Phase 2: Test specification generation from SW requirements
-- [ ] **Final Phase:** Integration of Phase 1 & 2 to auto-generate `.can` files for Vector CANoe from SW requirements using GUI.
+- [x] Phase 2: Test specification generation from SW requirements
+- [x] **Final Phase:** Integration of Phase 1 & 2 to auto-generate `.can` files for Vector CANoe from SW requirements using GUI.
+
+## Project Demo - "https://youtu.be/1XZUURtMlDU?si=BBWDQg15DugLbNF7"
 
 ## ⚖ License
 Distributed under the MIT License. See `LICENSE` for more information.
