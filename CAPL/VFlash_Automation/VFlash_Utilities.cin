@@ -1,0 +1,355 @@
+/*@!Encoding:1252*/
+variables
+{
+  enum vFlashStatusCode
+  {
+    InternalError                     = -10, 
+    CallbackInSimlationMissing        =  -3, 
+    TestFunctionInSimulationCalled    =  -2, 
+    Busy                              =  -1, 
+    Timeout                           =   0, 
+    Success                           =   1,      
+    
+    // --- FlashResult Errors ---
+    FR_InitializationError        = 1010, 
+    FR_DeinitializationError      = 1011, 
+    FR_InvalidProjectHandle       = 1012, 
+    FR_InvalidLicense             = 1013, 
+    FR_StopFailed                 = 1020, 
+    FR_ProjectInProcessing        = 1021, 
+    FR_NoProjectLoaded            = 1030, 
+    FR_ProjectPathInvalid         = 1031, 
+    FR_InconsistentProject        = 1032, 
+    FR_InvalidCallbacks           = 1033, 
+    FR_ProcessingFlashwareError   = 1034, 
+    FR_ChannelAlreadyInUse        = 1035,        
+    FR_NetworkActivationFailed    = 1036,  
+    FR_ChannelInvalid             = 1037, 
+    FR_NoCanDriverAvailable       = 1040, 
+    FR_SoftwareIntegrityCheckFailed = 1045, 
+    FR_InvalidCommandOrder        = 1050,  
+    FR_FileNotFound               = 1051, 
+    FR_ProjectLoadFailed          = 1052, 
+    FR_ProjectUnloadFailed        = 1053, 
+    FR_MaxProjectNumberExceeded   = 1054, 
+    FR_AttributeNotFound          = 1055, 
+    FR_AttributeConversionFailed  = 1056, 
+    FR_UnknownError               = 1100,
+
+    // --- FlashStatus Errors ---
+    FS_LicenseIsNotAvailable                      = 2009,     
+    FS_Aborted                                    = 2010,  
+    FS_UnknownError                               = 2011,  
+    FS_ProcessingFlashwareFailed                  = 2015,  
+    FS_InitializingCommunicationFailed            = 2016, 
+    FS_StopReprogrammingFailed                    = 2017,  
+    FS_ProjectDataInvalid                         = 2018,  
+    FS_InitializingFlashLibraryFailed             = 2019, 
+    FS_ScriptVersionMismatch                      = 2020, 
+    FS_LoadingProjectFailed                       = 2021, 
+    FS_FlashwareChanged                           = 2022, 
+    FS_ReadingExpectedIdentsFailed                = 2023, 
+    FS_ForceBootModeFailed                        = 2024,  
+    FS_SwitchBaudrateFailed                       = 2025, 
+    FS_SendWakeUpPatternFailed                    = 2026, 
+    FS_GeneralScriptFailure                       = 2040,  
+    FS_SeedKeyHandlingFailed                      = 2041,  
+    FS_SecurityAccessFailed                       = 2042, 
+    FS_CommunicationFailed                        = 2043,   
+    FS_DiagnosticTransactionFailed                = 2044, 
+    FS_SoftwareIntegrityCheckFailed               = 2045, 
+    FS_NegativeResponseReceived                   = 2046,  
+    FS_EraseMemoryFailed                          = 2047,  
+    FS_SoftwareAuthenticityCheckFailed            = 2048, 
+    FS_SoftwareCompatibilityCheckFailed           = 2049,  
+    FS_FingerprintCheckFailed                     = 2050, 
+    FS_HardwareCompatibilityCheckFailed           = 2051, 
+    FS_ProgrammingPreconditionsCheckFailed        = 2052, 
+    FS_InvalidParameterDetected                   = 2053,   
+    FS_GeneralCustomActionFailure                 = 2060,  
+    FS_CustomActionAttributeConversionFailed      = 2061,   
+    FS_ReportingFailure                           = 2080   
+  };
+}
+
+// --- Helper Function ---
+void LogvFlashError(char contextName[])
+{
+  char errorText[2048];
+  TestWaitForvFlashLastErrorMessage(errorText, elcount(errorText));
+  TestStepFail(contextName, "Error occurred: %s", errorText);
+}
+  
+/*
+ This function could be to program vflashpack successfully.
+*/
+enum vFlashStatusCode TestWaitForvFlashPackReprogrammed(char flashpack[])
+{
+  /* Function: TestWaitForvFlashPackReprogrammed
+  Description: MASTER VFLASH ENGINE. Native backend execution for Vector vFlash automation.
+  
+  Execution Context (CRITICAL WARNING):
+  STRICTLY FOR INTERNAL LIBRARY USE. DO NOT CALL THIS FUNCTION IN GENERATED TEST CASES!
+  This function does NOT handle timeout evaluation, iteration loops, or top-level CANoe reporting. 
+  If you need to flash an ECU, you MUST call the high-level wrappers (e.g., `singleTimeFlash` or `MultiTimeFlash`).
+  */
+  
+  enum vFlashStatusCode status;
+
+  if(flashpack[0] == 0) 
+  { 
+    TestStepFail("vFlash Init", "No path to flashpack given!");
+    return FR_FileNotFound;
+  }
+  
+  TestStep("vFlash Sequence", "Initialize vFlash Library");
+  if ((status = (enum vFlashStatusCode)TestWaitForvFlashInitialized()) != Success) 
+  { 
+    LogvFlashError("Init"); 
+    return status; 
+  }
+  
+  TestStep("vFlash Sequence", "Load vFlashpack: %s", flashpack);
+  if ((status = (enum vFlashStatusCode)TestWaitForvFlashProjectLoaded(flashpack)) != Success) 
+  { 
+    LogvFlashError("Load"); 
+    return status; 
+  }
+  
+  TestStep("vFlash Sequence", "Activate Network");
+  if ((status = (enum vFlashStatusCode)TestWaitForvFlashNetworkActivated()) != Success) 
+  { 
+    LogvFlashError("Network"); 
+    TestWaitForvFlashProjectUnloaded(); // Clean up project
+    TestWaitForvFlashDeinitialized();   // Clean up initialization
+    return status;
+  }
+  
+  TestStep("vFlash Sequence", "Start Flashing");
+  status = (enum vFlashStatusCode)TestWaitForvFlashReprogrammed();
+  if (status != Success) 
+  {
+    LogvFlashError("Flashing");
+  }
+  else 
+  {
+    TestStepPass("vFlash Sequence", "ECU reprogrammed successfully");
+  }
+  
+  // Final Teardown - Executes if Flashing succeeds or fails
+  TestStep("vFlash Sequence", "Unload and Deinitialize");
+  TestWaitForvFlashProjectUnloaded();
+  TestWaitForvFlashDeinitialized();
+  
+  return status;
+}
+
+/*
+ This function could be used when testing corrupted vflashpack - Application/Checksum/Signature corrupted files
+*/
+enum vFlashStatusCode TestWaitForCorruptedvFlashPackReprogrammed(char flashpack[], char expected_error_text[])
+{
+  /* Function: TestWaitForCorruptedvFlashPackReprogrammed
+  Description: MASTER FAULT INJECTION ENGINE. Native backend execution for testing corrupted vFlash payloads.
+  
+  Execution Context (CRITICAL WARNING):
+  STRICTLY FOR INTERNAL LIBRARY USE. DO NOT CALL THIS FUNCTION IN GENERATED TEST CASES!
+  This function handles low-level CANoe string matching (`errorText`) and vFlash status code tracking. 
+  If you need to perform a negative flash test, you MUST call the high-level wrapper: `Flash_corrupted_SW`.
+  */
+  enum vFlashStatusCode lastStatusCode;
+  char errorText[2048];
+  int hasProjectLoaded = 0;
+  int expectedErrorFound = 0;
+  
+  if(flashpack[0] == 0) 
+  { 
+    TestStepFail("vFlash Init", "No path to flashpack given!");
+    return FR_FileNotFound;
+  }
+  
+  TestStep("vFlash Sequence", "Initialize vFlash Library");
+  lastStatusCode = (enum vFlashStatusCode) TestWaitForvFlashInitialized();
+  if (lastStatusCode != Success) 
+  {
+	  TestWaitForvFlashLastErrorMessage(errorText, elcount(errorText));
+  } 
+  else 
+  {
+    TestStep("vFlash Sequence", "Load vFlashpack: %s", flashpack);
+    lastStatusCode = (enum vFlashStatusCode) TestWaitForvFlashProjectLoaded(flashpack);
+    if (lastStatusCode != Success) 
+    {
+      TestWaitForvFlashLastErrorMessage(errorText, elcount(errorText));
+    } 
+    else 
+    {
+      hasProjectLoaded = 1;
+      TestStep("vFlash Sequence", "Activate Network");
+      lastStatusCode = (enum vFlashStatusCode) TestWaitForvFlashNetworkActivated();
+      if (lastStatusCode != Success) 
+      {
+        TestWaitForvFlashLastErrorMessage(errorText, elcount(errorText));
+      } 
+      else 
+      {
+        TestStep("vFlash Sequence", "Start Flashing (Expecting Failure)");
+        lastStatusCode = (enum vFlashStatusCode) TestWaitForvFlashReprogrammed();
+        if (lastStatusCode == Success) 
+        {
+          TestStepFail("Error Check", "ECU reprogrammed successfully, but failure was expected.");
+        } 
+        else 
+        {
+          TestWaitForvFlashLastErrorMessage(errorText, elcount(errorText));
+        }
+      }
+    }
+  }
+  // Validate if the error we caught matches the error we wanted
+  if (lastStatusCode != Success) 
+  {
+    if (strstr(errorText, expected_error_text) != -1) 
+    {
+      TestStepPass("Error Check", "Caught expected error: %s", errorText);
+      expectedErrorFound = 1;
+    } 
+    else 
+    {
+      TestStepFail("Error Check", "Unexpected Error occurred: %s (Expected: %s)", errorText, expected_error_text);
+    }
+  }
+
+  TestStep("vFlash Sequence", "Unload and Deinitialize");
+  if(hasProjectLoaded) 
+  {
+    TestWaitForvFlashProjectUnloaded();
+  }
+  TestWaitForvFlashDeinitialized();
+
+  // Return Success if the expected error was found, meaning the negative test "passed"
+  return expectedErrorFound ? Success : lastStatusCode;
+}
+
+void singleTimeFlash(char flashpack_file[], long flash_max_time)
+{
+  /* Function: singleTimeFlash
+  Description: Automates a complete ECU flashing sequence using Vector's native vFlash engine.
+  
+  Dynamic Parameters:
+  - flashpack_file: The string name of the flash container. MUST end in `.vflashpack`.
+  - flash_max_time: The maximum allowable time for the flash process, in SECONDS. 
+    FALLBACK RULE: If the user does not specify a maximum time in their prompt, you MUST default to 300 (5 minutes).
+
+  Execution Context:
+  DO NOT write custom timers or `while` loops. This wrapper completely blocks execution and writes the Pass/Fail verdict natively.
+  */
+  enum vFlashStatusCode result;
+  long flash_start_time = 0, flash_end_time = 0;
+  long total_flash_time = 0;
+  // Flash start time in seconds
+  flash_start_time = timeNow()/100000;
+  // Flash VflashPack using TestWaitForvFlashPackReporgrammed function
+  result = TestWaitForvFlashPackReprogrammed(flashpack_file);
+  // Check if flashing is successful or not
+  if(result != Success)
+  {
+    // Flashing is failed
+    testStepFail("Flash Status", "Reprogramming Failed. See Test Report for the more information.");
+  }
+  else
+  {
+    // Flashing is successful
+    testStepPass("Flash Status", "Software is successfully flashed.");
+  }
+  // Flash end time in seconds
+  flash_end_time = timeNow()/100000;
+  // total time flashing took
+  total_flash_time = flash_end_time - flash_start_time;
+  // Check if it under defined flash time
+  if(total_flash_time <= flash_max_time)
+  {
+    testStepPass("Flashing Time", "Calculated Flashed time is under/equal to Maximum Flash time (%d s). Observed Flash time - %d s.", flash_max_time, total_flash_time);
+  }
+  else
+  {
+    testStepFail("Flashing Time", "Calculated Flashed time excedded to Maximum Flash time (%d s). Observed Flash time - %d s.", flash_max_time, total_flash_time);
+  }
+}
+
+void MultiTimeFlash(char flashpack_file[], int num_time, long flash_max_time)
+{
+  /* Function: MultiTimeFlash
+  Description: Automates a multi-iteration ECU flashing sequence (stress/robustness testing) using Vector's native vFlash engine.
+  
+  Dynamic Parameters:
+  - flashpack_file: The string name of the flash container. MUST end in `.vflashpack`.
+  - num_time: The integer number of consecutive times to flash the ECU.
+    FALLBACK RULE 1: If the user requests a multi-flash or stress test but does not specify the number of iterations, default to 3.
+  - flash_max_time: The maximum allowable time PER FLASH iteration, in SECONDS. 
+    FALLBACK RULE 2: If the user does not specify a maximum time, default to 300 (5 minutes).
+
+  Execution Context:
+  1. NO MANUAL LOOPS: DO NOT write a `for` or `while` loop around `singleTimeFlash`. Call this wrapper exactly once.
+  2. PARAMETER ORDER: Ensure the iteration count (`num_time`) comes immediately before the time limit (`flash_max_time`).
+  */
+  enum vFlashStatusCode result;
+  int i = 0;
+  long flash_start_time = 0, flash_end_time = 0;
+  long total_flash_time = 0;
+  for(i= 0; i < num_time; i++)
+  {
+    // Flash iteration number
+    teststep("Flash Iteration", "Count number - %d", i+1);
+    // Flash start time in seconds
+    flash_start_time = timeNow()/100000;
+    // Flash VflashPack using TestWaitForvFlashPackReporgrammed function
+    result = TestWaitForvFlashPackReprogrammed(flashpack_file);
+    // Check if flashing is successful or not
+    if(result != Success)
+    {
+      // Flashing is failed
+      testStepFail("Flash Status", "Reprogramming Failed. See Test Report for the more information.");
+    }
+    else
+    {
+      // Flashing is successful
+      testStepPass("Flash Status", "Software is successfully flashed.");
+    }
+    // Flash end time in seconds
+    flash_end_time = timeNow()/100000;
+    // total time flashing took
+    total_flash_time = flash_end_time - flash_start_time;
+    // Check if it under defined flash time
+    if(total_flash_time <= flash_max_time)
+    {
+      testStepPass("Flashing Time", "Calculated Flashed time is under/equal to Maximum Flash time (%d s). Observed Flash time - %d s.", flash_max_time, total_flash_time);
+    }
+    else
+    {
+      testStepFail("Flashing Time", "Calculated Flashed time excedded to Maximum Flash time (%d s). Observed Flash time - %d s.", flash_max_time, total_flash_time);
+    }
+  }
+}
+
+void Flash_corrupted_SW(char vflashpack_file[], char expected_error[])
+{
+  /* Function: Flash_corrupted_SW
+  Description: Fault Injection wrapper for negative flash testing using Vector's native vFlash engine.
+  
+  Dynamic Parameters:
+  - vflashpack_file: The string name of the corrupted flash container. MUST end in `.vflashpack`.
+  - expected_error: The exact string of the expected security failure.
+
+  | expected_error (String) | Use Case / Fault Type                        |
+  |-------------------------|----------------------------------------------|
+  | "Signature"             | App/Bootloader Signature validation failure  |
+  | "Checksum"              | CRC / Checksum verification failure          |
+
+  Execution Context (CRITICAL TRIGGER RULE):
+  1. EXPLICIT TRIGGER ONLY: You MUST NOT call this function unless the user explicitly mentions the keyword `vflashpack` in their prompt.
+  2. FALLBACK: If the user asks to inject a flash fault or simulate a failure, but DOES NOT mention `vflashpack`, you must NOT use this wrapper. Instead, manually generate the UDS diagnostic sequence (using `request_download`, `transfer_data`, etc.) to design the failure.
+  */
+  
+  TestWaitForCorruptedvFlashPackReprogrammed(vflashpack_file, expected_error);
+}

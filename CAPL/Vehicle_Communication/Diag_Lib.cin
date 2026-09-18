@@ -1,0 +1,897 @@
+/*@!Encoding:1252*/
+includes
+{
+  #include "Preprocess_Flash_file.cin"
+}
+
+long UDS_Request(diagRequest * diagReq)
+{
+  /* Function: UDS_Request
+  Description: MASTER BACKEND ENGINE. Handles CANoe transmission, timeout logic (TX/RX), and writes directly to the HTML test report.
+  
+  Execution Context (CRITICAL WARNING):
+  STRICTLY FOR INTERNAL LIBRARY USE. DO NOT CALL THIS FUNCTION IN GENERATED TEST CASES!
+  This function does NOT handle memory safety, array resizing, or byte assignment. 
+  If you need to send a request, you MUST call a high-level wrapper (e.g., `DiagRequest_via_bytes_WithFixedLengthReturnType`, `tester_present`, or `readDtcInformationWithStatusMask`).
+  */
+  
+  long ret_val = 0;
+  
+  // Send diag request
+  diagSendRequest(diagReq);
+  
+  // Write requested service in the report
+  testReportWriteDiagObject(diagReq);
+  
+  // wait for diagnostic request sent (5000ms timeout)
+  if(1 == testWaitForDiagRequestSent(diagReq, 5000))
+  {
+    // wait for diagnostic response (10000ms timeout)
+    switch(testWaitForDiagResponse(diagReq, 10000))
+    {
+      case 0:
+        // Timeout: No response received from ECU
+        testStepFail("Timeout", "ECU didn't respond within defined time.");
+        break;
+      case 1:
+        // Response received
+        testReportWriteDiagResponse(diagReq);
+        
+        // Check for Positive/Negative Response (-1 represents Positive Response in CANoe)
+        if(diagGetLastResponseCode(diagReq) == -1)
+        {
+          teststep("Response Received", "Positive response received from requested diagnostic service.");
+          ret_val = 1;
+        }
+        else
+        {
+          testStepFail("Response Received", "Negative Response Received.");
+        }
+        break;
+      default:
+        // Internal Error: Unknown Error
+        testStepFail("Unexpected Error", "Internal/Setup Error: Verdict Unreliable.");
+    }
+  }
+  else
+  {
+    // Unable to send the Diagnostic request
+    testStepFail("Request Info", "Unable to send the diagnostic request within defined time.");
+  }
+  
+  return ret_val;
+}
+
+void UDS_Response(diagRequest * diagReq, byte data_buffer[])
+{
+  /* Function: UDS_Response
+  Description: Core utility to extract the raw hexadecimal response payload from the ECU after a successful UDS request.
+  
+  Dynamic Parameters:
+  - diagReq: The global UDS diagnostic object (always pass `diag_request_obj`).
+  - data_buffer: The array where the response bytes will be saved. 
+
+  Execution Context:
+  1. ARRAY SAFETY: ALWAYS declare a safe, oversized buffer before calling this function: `byte diag_response_byte[4096];`
+  2. CHRONOLOGY: ONLY call this function AFTER successfully sending a request. It must be inside a success condition (e.g., `if (ret_status == 1)`).
+  
+  Note on Response Indexing:
+  Once the data is extracted, `data_buffer[0]` will ALWAYS be the Response SID (Original SID + 0x40). 
+  For example, if you sent Service 0x22, `data_buffer[0]` will be 0x62. The actual payload data starts at `data_buffer[1]` or later.
+  */
+  
+  long buffer_size, i;
+  buffer_size = DiagGetPrimitiveSize(diagReq);
+  
+  for(i=0; i < buffer_size; i++)
+  {
+    data_buffer[i] = DiagGetPrimitiveByte(diagReq, i);
+  }
+}
+
+// Function can be used when service is requested via diag object is defined in the variables
+void DiagRequest_via_object(diagRequest * diagReq)
+{
+  /* Function: DiagRequest_via_object
+  Description: Sends a pre-configured UDS diagnostic object (linked from the CDD/PDX database) and logs a pass on positive response.
+  
+  Execution Context:
+  1. USE CASE: ONLY use this function if the test specification explicitly provides the EXACT string name of a database object to instantiate. 
+  2. RESTRICTION: Do NOT invent or guess CDD object names. If the user asks you to send raw hex bytes (e.g., 0x22 0xF1 0x90), you MUST use `DiagRequest_via_bytes_WithFixedLengthReturnType` instead.
+  */
+  
+  if(1 == UDS_Request(diagReq))
+  {
+    testStepPass("Response Received", "Positive Response Received.");
+  }
+}
+
+// Function can be used when service is requested via bytes
+void DiagRequest_via_bytes(diagRequest * diagReq, byte request_arr[])
+{
+  /* Function: DiagRequest_via_bytes
+  Description: Backend UDS execution wrapper for exact-size static arrays. Sends the payload and logs a pass on positive response.
+  
+  Execution Context (CRITICAL WARNING):
+  DO NOT USE THIS FUNCTION FOR CUSTOM PAYLOADS!
+  Because this function relies on array size inference, passing an oversized buffer will cause a fatal message length error. 
+  If you are generating a custom UDS request in a test case, you MUST use `DiagRequest_via_bytes_WithFixedLengthReturnType` instead.
+  */
+  
+  diagResize(diagReq, elCount(request_arr));
+  diagSetPrimitiveData(diagReq, request_arr, elCount(request_arr));
+  
+  if(1 == UDS_Request(diagReq))
+  {
+    testStepPass("Response Received", "Positive Response Received");
+  }
+}
+
+// Function can be used when service is requested via bytes with Fixed length
+// Return status for further execution
+int DiagRequest_via_bytes_WithFixedLengthReturnType(diagRequest * diagReq, byte request_arr[], int total_length)
+{
+  /* Function: DiagRequest_via_bytes_WithFixedLengthReturnType
+  Description: Core UDS execution wrapper. Sends a raw array of hexadecimal bytes and returns the status (1 = Pass/Positive Response, 0 = Fail).
+  
+  Dynamic Parameters:
+  - diagReq: The global UDS diagnostic object (always pass `diag_request_obj`).
+  - request_arr: The array containing the exact UDS payload (SID + Sub-function + Data).
+  - total_length: The exact number of bytes to send.
+
+  Execution Context (CUSTOM PAYLOADS):
+  If generating a custom UDS request, you MUST use this function with an auto-incrementing length variable to prevent CAPL array out-of-bounds errors.
+  
+  Example Usage:
+  byte diag_request_byte[4096];
+  int len = 0;
+  diag_request_byte[len++] = 0xBA; // Custom SID
+  diag_request_byte[len++] = 0x05; // Custom Sub-function
+  int status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, len);
+  */
+  
+  int ret = 0;
+  
+  diagResize(diagReq, total_length);
+  diagSetPrimitiveData(diagReq, request_arr, total_length);
+  
+  if(1 == UDS_Request(diagReq))
+  {
+    testStepPass("Response Received", "Positive Response Received");
+    ret = 1;
+  }
+  
+  return ret;
+}
+
+void default_session()
+{
+  /* Function: default_session
+  Description: UDS Service 0x10 (Diagnostic Session Control) - Default Session
+  | sub_function (Byte 1)           |
+  |---------------------------------|
+  | 0x01: Default Session           |
+  */
+  byte diag_request_byte[2] = {0x10, 0x01};
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void programming_session()
+{
+  /* Function: programming_session
+  Description: UDS Service 0x10 (Diagnostic Session Control) - Programming Session
+  | sub_function (Byte 1)           |
+  |---------------------------------|
+  | 0x02: Programming Session           |
+  */
+  byte diag_request_byte[2] = {0x10, 0x02};
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void extended_session()
+{
+  /* Function: extended_session
+  Description: UDS Service 0x10 (Diagnostic Session Control) - Extended Session
+  | sub_function (Byte 1)           |
+  |---------------------------------|
+  | 0x03: Extended Session           |
+  */
+  byte diag_request_byte[2] = {0x10, 0x03};
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void hard_reset()
+{
+  /* Function: hard_reset
+  Description: UDS Service 0x11 (ECU Reset) - Hard Reset
+  | sub_function (Byte 1)           |
+  |---------------------------------|
+  | 0x01: Hard Reset                |
+  */
+  byte diag_request_byte[2] = {0x11, 0x01};
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void KeyOffOnReset()
+{
+  /* Function: KeyOffOnReset
+  Description: UDS Service 0x11 (ECU Reset) - Key off on
+  | sub_function (Byte 1)           |
+  |---------------------------------|
+  | 0x02: Key off on                |
+  */
+  byte diag_request_byte[2] = {0x11, 0x02};
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void soft_reset()
+{
+  /* Function: soft_reset
+  Description: UDS Service 0x11 (ECU Reset) - Soft Reset
+  | sub_function (Byte 1)           |
+  |---------------------------------|
+  | 0x03: Soft Reset                |
+  */
+  byte diag_request_byte[2] = {0x11, 0x03};
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void clear_Diagnostic_information(dword dtc_number)
+{
+  /* Function: clear_diagnostic_information
+  Description: UDS Service 0x14 (Clear Diagnostic Information)
+  | dtc_number (Bytes 1-3)          |
+  |---------------------------------|
+  | 0x5287C6: Specific DTC          |
+  | 0xFFFFFF: Clear All DTCs        |
+  */
+  byte diag_request_byte[4];
+  diag_request_byte[0] = 0x14;
+  diag_request_byte[1] = (dtc_number >> 16) & 0xFF;
+  diag_request_byte[2] = (dtc_number >> 8) & 0xFF;
+  diag_request_byte[3] = dtc_number & 0xFF;
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void readDtcInformationWithSubFuncOnly(byte sub_function)
+{
+  /* Function: readDtcInformationWithSubFuncOnly
+  Description: UDS Service 0x19 (Read DTC Information) - Sub-function only
+  | sub_function (Byte 1)           |
+  |---------------------------------|
+  | 0x0A: Report Supported DTCs     |
+  | 0x0B: Report First Test Failed  |
+  | 0x0C: Report Last Test Failed   |
+  | 0x0D: Report Confirm DTCs       |
+  | 0x0E: Report Test Failed Since  |
+  | 0x13: Report First Confirmed DTC|
+  | 0x14: Report Most Recent Conf.  |
+  */
+  byte diag_request_byte[2];
+  diag_request_byte[0] = 0x19;
+  diag_request_byte[1] = sub_function;
+  
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void readDtcInformationWithStatusMask(byte sub_function, byte dtcStatusMask)
+{
+  /* Function: readDtcInformationWithStatusMask
+  Description: UDS Service 0x19 (Read DTC Information) - Sub-function + Status Mask
+  
+  Note on dtcStatusMask: This is a bitmask. To combine multiple statuses, 
+  add their hex values together (e.g., Pending + Confirmed = 0x04 + 0x08 = 0x0C).
+  
+  | sub_function (Byte 1)           | dtcStatusMask (Byte 2)              |
+  |---------------------------------|-------------------------------------|
+  | 0x01: Report Number of DTCs     | 0x00: Mask disabled                 |
+  | 0x02: Report DTC by Status Mask | 0x01: TestFailed                    |
+  | 0x0F: Report All DTCs by Mask   | 0x02: TestFailedThisMonitoringCycle |
+  | 0x11: Report First Test Failed  | 0x04: PendingDTC                    |
+  | 0x12: Report Last Test Failed   | 0x08: ConfirmedDTC                  |
+  |                                 | 0x10: TestNotCompletedSinceLast     |
+  |                                 | 0x20: TestFailedSinceLastClear      |
+  |                                 | 0x40: TestNotCompletedThisMonit     |
+  |                                 | 0x80: Warning Lamps                 |
+  */
+  byte diag_request_byte[3];
+  diag_request_byte[0] = 0x19;
+  diag_request_byte[1] = sub_function;
+  diag_request_byte[2] = dtcStatusMask;
+  
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void readDtcInformationWithDtcAndRecord(byte sub_function, dword dtcNumber, byte recordNumber)
+{
+  /* Function: readDtcInformationWithDtcAndRecord
+  Description: UDS Service 0x19 (Read DTC Information)
+  
+  Dynamic Parameters:
+  - dtcNumber: The 3-byte DTC hex value requested by the test (e.g., 0x930011)
+  - recordNumber: The specific data record ID (Use 0xFF to read all records)
+
+  | sub_function (Byte 1)                      |
+  |--------------------------------------------|
+  | 0x04: Read DTC Snapshot Data               |
+  | 0x06: Read DTC Extended Data               |
+  | 0x10: Read DTC Mirror Memory               |
+  */
+  byte diag_request_byte[6];
+  diag_request_byte[0] = 0x19;
+  diag_request_byte[1] = sub_function;
+  diag_request_byte[2] = (dtcNumber >> 16) & 0xFF;
+  diag_request_byte[3] = (dtcNumber >> 8) & 0xFF;
+  diag_request_byte[4] = dtcNumber & 0xFF;
+  diag_request_byte[5] = recordNumber;
+  
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void readDtcInformationWithSeverity(byte sub_function, byte severityMask, byte statusMask)
+{
+  /* Function: readDtcInformationWithSeverity
+  Description: UDS Service 0x19 (Read DTC Information) filtering by Severity and Status.
+  
+  Note on Masks: Both `severityMask` and `statusMask` are bitmasks. To combine multiple 
+  statuses or severities, add their hex values together (e.g., Pending + Confirmed = 0x0C).
+  
+  | sub_function (Byte 1)                   | severityMask (Byte 2)          | statusMask (Byte 3)                       |
+  |-----------------------------------------|--------------------------------|-------------------------------------------|
+  | 0x07: Report Number of DTCs by Severity | 0x20: Maintenance Only         | 0x00: Mask disabled / No Status           |
+  | 0x08: Report DTC by Severity Record     | 0x40: Check Immediately        | 0x01: TestFailed                          |
+  |                                         | 0x80: Check At Next Halt       | 0x02: TestFailedThisMonitoringCycle       |
+  |                                         |                                | 0x04: PendingDTC                          |
+  |                                         |                                | 0x08: ConfirmedDTC                        |
+  |                                         |                                | 0x10: TestNotCompletedSinceLast           |
+  |                                         |                                | 0x20: TestFailedSinceLastClear            |
+  |                                         |                                | 0x40: TestNotCompletedThisMonitoringCycle |
+  |                                         |                                | 0x80: Warning Lamps                       | 
+  */
+  byte diag_request_byte[4];
+  diag_request_byte[0] = 0x19;
+  diag_request_byte[1] = sub_function;
+  diag_request_byte[2] = severityMask;
+  diag_request_byte[3] = statusMask;
+  
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void read_did_by_identifier(word did_number)
+{
+  /* Function: read_did_by_identifier
+  Description: UDS Service 0x22 (Read Data By Identifier)
+  | did_number (Bytes 1-2)          |
+  |---------------------------------|
+  | 0xF120: Example DID             |
+  | 0x----: Project Specific DIDs   |
+  */
+  byte diag_request_byte[3];
+  diag_request_byte[0] = 0x22;
+  diag_request_byte[1] = (did_number >> 8) & 0xFF;
+  diag_request_byte[2] = did_number & 0xFF;
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+void read_memory_by_address(byte ALFID, dword memory_address, dword memory_size)
+{
+  /* Function: read_memory_by_address
+  Description: UDS Service 0x23 (Read Memory By Address).
+  
+  Dynamic Parameters:
+  - memory_address: The starting hexadecimal memory address to read (e.g., 0x20001000).
+  - memory_size: The number of bytes to read from the memory address.
+
+  Note on ALFID: The High Nibble defines the byte-length of the `memory_size`. The Low Nibble defines the byte-length of the `memory_address`.
+
+  | ALFID (Byte 1) | Size Byte Length | Address Byte Length | Common Use Case                               |
+  |----------------|------------------|---------------------|-----------------------------------------------|
+  | 0x14           | 1 Byte           | 4 Bytes             | Small reads (up to 255 bytes)                 |
+  | 0x24           | 2 Bytes          | 4 Bytes             | Medium reads (up to 65,535 bytes)             |
+  | 0x44           | 4 Bytes          | 4 Bytes             | Large reads (Full 32-bit size and address)    |
+  | 0x22           | 2 Bytes          | 2 Bytes             | Legacy 16-bit addressing ECUs                 |
+  | 0x34           | 3 Bytes          | 4 Bytes             | 24-bit size / 32-bit address                  |
+  */
+  byte diag_request_byte[20];   // Max payload 20 bytes
+  int i;
+  int index = 0;
+  byte address_len;
+  byte size_len;
+  int total_length;
+  
+  // Extract lengths from ALFID
+  address_len = ALFID & 0x0F;          // Low nibble
+  size_len    = (ALFID >> 4) & 0x0F;   // High nibble
+
+  // Calculate total diagnostic request length
+  total_length = 2 + address_len + size_len;  // 23 12 XX XX YY
+  // 1. Set SID and ALFID
+  diag_request_byte[index++] = 0x23;
+  diag_request_byte[index++] = ALFID;
+  // 2. Pack the Memory Address
+  for (i = address_len - 1; i >= 0; i--) 
+  {
+    diag_request_byte[index++] = (memory_address >> (i * 8)) & 0xFF;
+  }
+  // 3. Pack the Memory Size
+  for (i = size_len - 1; i >= 0; i--) 
+  {
+    diag_request_byte[index++] = (memory_size >> (i * 8)) & 0xFF;
+  }
+  
+  DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, total_length);
+}
+
+int security_access_unlock(byte seed_level, byte key_level)
+{
+  /* Function: security_access_unlock
+  Description: UDS Service 0x27 (Security Access). Handles both Seed request and Key send.
+  
+  | Security Level / Use Case          | seed_level (Request Seed) | key_level (Send Key) |
+  |------------------------------------|---------------------------|----------------------|
+  | Level 1 (Standard Diagnostic)      | 0x01                      | 0x02                 |
+  | Level 3 (Extended / Supplier)      | 0x03                      | 0x04                 |
+  | Level 17 (Specific OEM Level)      | 0x11                      | 0x12                 |
+  | Level 51 (Programming / Flash)     | 0x33                      | 0x34                 |
+  */
+  int i = 0;
+  byte seed_diag_request[2];
+  int ret_seed_status;
+  int ret_key_gen_status;
+  int ret_key_status;
+  byte temp_seed_bytes[seed_response_arr_size];
+  byte key_diag_request[key_request_arr_size];
+  byte seed_bytes[seed_arr_size];
+  byte key_bytes[key_arr_size];
+  int ret_status = 0;
+  
+  // Prepare Seed request
+  seed_diag_request[0] = 0x27;
+  seed_diag_request[1] = seed_level;
+  // Prepare Key request
+  ret_seed_status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, seed_diag_request, elcount(seed_diag_request));
+  if(ret_seed_status == 1)
+  {
+    // Seed generation successful
+    testStep("Seed Generation", "Seed is successfully generated.");
+    UDS_Response(diag_request_obj, temp_seed_bytes);
+    // Extract Seed bytes from resposne
+    for(i = 0; i < seed_arr_size; i++)
+    {
+      seed_bytes[i] = temp_seed_bytes[i+2];
+    }
+    // Generate key usign SEED and Security.dll attached under Diagnostic/ISO TP config
+    ret_key_gen_status = diagGenerateKeyFromSeed(ECU_Name, seed_bytes, seed_arr_size, seed_level, "", "", key_bytes, key_arr_size, KeyActualSize);
+    if(0 == ret_key_gen_status)
+    {
+      // Key is generated successfully
+      teststep("Key Generation", "Key is successfully generated.");
+      key_diag_request[0] = 0x27;
+      key_diag_request[1] = key_level;
+      for(i = 0; i < key_arr_size; i++)
+      {
+        key_diag_request[i+2] = key_bytes[i];
+      }
+      testWaitForTimeoutSilent(1000);
+      ret_key_status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, key_diag_request, elcount(key_diag_request));
+      if(1 == ret_key_status)
+      {
+        // ECU Unlock
+        ret_status = 1;
+        testStepPass("Security Unlock Status", "ECU is unlocked !! Generated Key is correct.");
+      }
+      else
+      {
+        // ECU remains lock
+        testStepFail("Security Unlock Status", "ECU is locked. Generated key is not correct.");
+      }
+    }
+    else
+    {
+      testStepFail("Key Generation", "Unable to generate key. Error code: %d", ret_key_gen_status);
+    }
+  }
+  else
+  {
+    testStepFail("Seed Generation", "Unable to generate Seed !!");
+  }
+  return ret_status;
+}
+
+void communication_control(byte control_type, byte communication_type)
+{
+  /* Function: communication_control
+  Description: UDS Service 0x28 (Communication Control)
+  
+  | control_type (Byte 1)           | communication_type (Byte 2)                  |
+  |---------------------------------|----------------------------------------------|
+  | 0x00: Enable Rx and Tx          | 0x01: Normal Communication Messages          |
+  | 0x01: Enable Rx and Disable Tx  | 0x02: Network Management Comm Messages       |
+  | 0x02: Disable Rx and Enable Tx  | 0x03: Normal and Network Management Messages |
+  | 0x03: Disable Rx and Tx         |                                              |
+  EXAMPLES OF EXACT USAGE:
+  communication_control(0x03, 0x01); // Disable Rx and Tx for Normal Communication
+  communication_control(0x00, 0x03); // Enable Rx and Tx for BOTH Normal and NM
+  communication_control(0x01, 0x02); // Enable Rx and Disable Tx for Network Management
+  */
+  byte diag_request_byte[3];
+  diag_request_byte[0] = 0x28;
+  diag_request_byte[1] = control_type;
+  diag_request_byte[2] = communication_type;
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+int write_data_by_identifier(dword did_number, byte data_bytes[])
+{
+  /* Function: write_data_by_identifier
+  Description: UDS Service 0x2E (Write Data By Identifier)
+  
+  | did_number (Bytes 1-2)          | data_bytes[] (Bytes 3-N)                     |
+  |---------------------------------|----------------------------------------------|
+  | 0xF121: Application Soft. Ver   | Byte array containing the data record        |
+  | 0xF190: Vehicle Ident. Number   | Length is specific to the requested DID      |
+  | 0x----: Custom Project DIDs     | Max length limited by transport protocol     |
+  */
+  int i = 0;
+  byte diag_request_byte[255];
+  int total_length;
+  int ret_status = 0;
+  
+  // total length for diag_request_byte
+  total_length = 3 + elcount(data_bytes);
+  
+  if(total_length > elcount(diag_request_byte))
+  {
+    testStepWarning("Request Send Status", "Unable to send the diagnostic request as total length exceeds defined buffer size.");
+  }
+  else
+  {
+    // Prepare Diag request
+    diag_request_byte[0] = 0x2E;
+    diag_request_byte[1] = (did_number >> 8) & 0xFF;
+    diag_request_byte[2] = did_number & 0xFF;
+    for(i = 0; i < elcount(data_bytes); i++)
+    {
+      diag_request_byte[i+3] = data_bytes[i];
+    }
+    ret_status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, total_length);    
+  }
+  return ret_status;
+}
+
+int routine_control(byte sub_function, word rid_number, byte data_bytes[], int data_len)
+{
+  /* Function: routine_control
+  Description: UDS Service 0x31 (Routine Control). Starts, stops, or gets results for a specific ECU routine.
+  
+  Dynamic Parameters:
+  - rid_number: The 2-byte Routine Identifier (RID) requested (e.g., 0x0201 for Erase Memory, 0xFF00 for Check).
+  - data_bytes: Array of optional parameter bytes. IF NO DATA IS REQUIRED, declare `byte dummy_data[1] = {0};` and pass it.
+  - data_len: The number of bytes in `data_bytes`. IF NO DATA IS REQUIRED, pass `0`.
+
+  | sub_function (Byte 1)         | Action                        |
+  |-------------------------------|-------------------------------|
+  | 0x01: Start Routine           | Start / Execute               |
+  | 0x02: Stop Routine            | Stop / Abort                  |
+  | 0x03: Request Routine Results | Request Results               |
+  */
+  int ret_status = 0;
+  int i;
+  int total_length;
+  byte diag_request_byte[4096];
+  
+  total_length = 4 + data_len;
+  diag_request_byte[0] = 0x31;
+  diag_request_byte[1] = sub_function;
+  diag_request_byte[2] = (rid_number >> 8) & 0xFF;
+  diag_request_byte[3] = rid_number & 0xFF;
+  for(i = 0; i < data_len; i++)
+  {
+    diag_request_byte[i+4] = data_bytes[i];
+  }
+  
+  ret_status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, total_length);
+  return ret_status;
+}
+
+int request_download(byte dataformatID, byte ALFID, dword memory_address, dword memory_size)
+{
+  /* Function: request_download
+  Description: UDS Service 0x34 (Request Download). Initiates a data transfer from the tester to the ECU.
+  
+  Dynamic Parameters:
+  - memory_address: The starting hexadecimal memory address to write to (e.g., 0x2000A100).
+  - memory_size: The uncompressed size (in bytes) of the data payload to be downloaded.
+
+  | dataFormatID (Byte 1) | Compression Method | Encryption Method | Common Use Case                          |
+  |-----------------------|--------------------|-------------------|------------------------------------------|
+  | 0x00                  | 0 (None)           | 0 (None)          | Standard unencrypted/uncompressed flash  |
+  | 0x10                  | 1 (Method 1)       | 0 (None)          | Compressed payload, no encryption        |
+  | 0x01                  | 0 (None)           | 1 (Method 1)      | Encrypted payload, no compression        |
+  | 0x11                  | 1 (Method 1)       | 1 (Method 1)      | Both Compressed and Encrypted            |
+
+  | ALFID (Byte 2)        | Size Byte Length   | Address Length    | Common Use Case                          |
+  |-----------------------|--------------------|-------------------|------------------------------------------|
+  | 0x14                  | 1 Byte             | 4 Bytes           | Small payloads (up to 255 bytes)         |
+  | 0x24                  | 2 Bytes            | 4 Bytes           | Medium payloads (up to 65,535 bytes)     |
+  | 0x34                  | 3 Bytes            | 4 Bytes           | Large payloads (up to 16 MB)             |
+  | 0x44                  | 4 Bytes            | 4 Bytes           | Huge payloads (Full 32-bit architecture) |
+  */
+  byte diag_request_byte[20];
+  int i;
+  int index = 0;
+  byte address_len;
+  byte size_len;
+  int total_length;
+  int ret_status;
+  
+  // Extract lengths from ALFID
+  address_len = ALFID & 0x0F;          // Low nibble
+  size_len    = (ALFID >> 4) & 0x0F;   // High nibble
+
+  // Calculate total diagnostic request length
+  total_length = 3 + address_len + size_len;  // 34 CE ALFID XX XX YY YY
+  
+  // 1. Set SID and ALFID
+  diag_request_byte[index++] = 0x34;
+  diag_request_byte[index++] = dataformatID;
+  diag_request_byte[index++] = ALFID;
+  // 2. Pack the Memory Address
+  for (i = address_len - 1; i >= 0; i--) 
+  {
+    diag_request_byte[index++] = (memory_address >> (i * 8)) & 0xFF;
+  }
+  // 3. Pack the Memory Size
+  for (i = size_len - 1; i >= 0; i--) 
+  {
+    diag_request_byte[index++] = (memory_size >> (i * 8)) & 0xFF;
+  }
+  
+  ret_status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, total_length);
+  return ret_status;
+}
+
+int transfer_data(char file_name[])
+{
+  /* Function: transfer_data
+  Description: UDS Service 0x36 (Transfer Data). Automates the file reading, data chunking, and block sequence counter management.
+  
+  Dynamic Parameters:
+  - file_name: The string path or name of the binary/hex file to flash (e.g., "payload.bin", "app_block.hex").
+
+  Note on Execution: 
+  DO NOT generate a `while` loop or manually manage the `blockSequenceCounter`. 
+  Calling this wrapper a single time will transfer the entire file automatically.
+  */
+  int ret_status = 0;
+  int ret_preprocess_status = 0;
+  ret_preprocess_status = PreProcessFirmwareFile(file_name);
+  if(ret_preprocess_status == 1)
+  {
+    // Start the Transfer Data sequence
+    ret_status = StartTransferData(); 
+    if (ret_status == 1)
+    {
+      testStep("Flash Process", "File transfer completed successfully.");
+    }
+    else
+    {
+      testStepFail("Flash Process", "Data transfer aborted due to an error.");
+    }
+  }
+  else
+  {
+    testStepFail("Pre-Processing Failed", "Unable to preprocess the file.");
+  }
+  return ret_status;
+}
+
+int transfer_exit()
+{
+  /* Function: transfer_exit
+  Description: UDS Service 0x37 (Request Transfer Exit). Terminates the active data transfer sequence.
+  
+  Execution Context:
+  1. CHRONOLOGY: You MUST call this function immediately after the `transfer_data()` (Service 0x36) step completes.
+  2. ARGUMENTS: This function takes ZERO parameters. Do not attempt to pass sub-functions, file names, or hex codes.
+  */
+  byte diag_request_byte[1];
+  int ret_status = 0;
+  diag_request_byte[0] = 0x37;
+  ret_status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, elcount(diag_request_byte));
+  return ret_status;
+}
+
+void write_memory_by_address(byte ALFID, dword memory_address, dword memory_size, byte data_bytes[])
+{
+  /* Function: write_memory_by_address
+  Description: UDS Service 0x3D (Write Memory By Address). Writes raw hexadecimal data directly to ECU memory.
+  
+  Dynamic Parameters:
+  - memory_address: The starting hexadecimal memory address to write to (e.g., 0x2000A100).
+  - memory_size: The exact number of bytes being written. This MUST match the size of `data_bytes`.
+  - data_bytes: The array of data to write. 
+
+  Note on ALFID: The High Nibble defines the byte-length of the `memory_size`. The Low Nibble defines the byte-length of the `memory_address`.
+
+  | ALFID (Byte 1) | Size Byte Length | Address Byte Length | Common Use Case                               |
+  |----------------|------------------|---------------------|-----------------------------------------------|
+  | 0x14           | 1 Byte           | 4 Bytes             | Small writes (up to 255 bytes)                |
+  | 0x24           | 2 Bytes          | 4 Bytes             | Medium writes (up to 65,535 bytes)            |
+  | 0x44           | 4 Bytes          | 4 Bytes             | Large writes (Full 32-bit size and address)   |
+  | 0x22           | 2 Bytes          | 2 Bytes             | Legacy 16-bit addressing ECUs                 |
+  */
+  byte diag_request_byte[4096];   // Max payload 4096 bytes
+  int i;
+  int index = 0;
+  byte address_len;
+  byte size_len;
+  int total_length;
+  
+  // Extract lengths from ALFID
+  address_len = ALFID & 0x0F;          // Low nibble
+  size_len    = (ALFID >> 4) & 0x0F;   // High nibble
+  
+  if(address_len > 4 || size_len > 4)
+  {
+    testStepWarning("Request Send Status", "Unable to send request as address length or Memory size is greater than 4.");
+  }
+  else
+  {
+     // Calculate total diagnostic request length
+    total_length = 2 + address_len + size_len + elcount(data_bytes);  // 3D 12 XX XX YY ZZ ZZ ZZ ZZ
+    // 1. Set SID and ALFID
+    diag_request_byte[index++] = 0x3D;
+    diag_request_byte[index++] = ALFID;
+    // 2. Pack the Memory Address
+    for (i = address_len - 1; i >= 0; i--) 
+    {
+      diag_request_byte[index++] = (memory_address >> (i * 8)) & 0xFF;
+    }
+    // 3. Pack the Memory Size
+    for (i = size_len - 1; i >= 0; i--) 
+    {
+      diag_request_byte[index++] = (memory_size >> (i * 8)) & 0xFF;
+    }
+    // 4. Pack the data bytes
+    for (i = 0; i < elcount(data_bytes); i++)
+    {
+      diag_request_byte[index++] = data_bytes[i];
+    }
+    
+    DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, total_length); 
+  }
+}
+
+void tester_present(byte suppress_response)
+{
+  /* Function: tester_present
+  Description: UDS Service 0x3E (Tester Present). Keeps the current diagnostic session active.
+  
+  | suppress_response (Byte 1) | Use Case                                                 |
+  |----------------------------|----------------------------------------------------------|
+  | 1                          | Default. Suppresses the ECU's response (Sub-function 0x80) |
+  | 0                          | Requires the ECU to send a response (Sub-function 0x00)    |
+  CRITICAL RULE: The underlying wrapper handles all execution and wait times automatically. 
+  Do NOT use sleep(), testWaitForTimeout(), or manual response checks after calling this.
+
+  EXAMPLES OF EXACT USAGE:
+  tester_present(1); // Send Tester Present with Suppress Positive Response (SPR) enabled
+  tester_present(0); // Send Tester Present and wait for the ECU's positive response
+  */
+  
+  byte diag_request_byte[2];
+  diag_request_byte[0] = 0x3E;
+  
+  // Apply the Suppress Positive Response (SPR) bit
+  if (suppress_response == 1) 
+  {
+    diag_request_byte[1] = 0x80; 
+  }
+  else 
+  {
+    diag_request_byte[1] = 0x00;
+  }
+  
+  DiagRequest_via_bytes(diag_request_obj, diag_request_byte);
+}
+
+int control_dtc_setting(byte dtc_setting, byte suppress_response)
+{
+  /* Function: control_dtc_setting
+  Description: UDS Service 0x85 (Control DTC Setting). Enables or disables the ECU's ability to set new Diagnostic Trouble Codes.
+  
+  | dtc_setting (Byte 1) | Action                         |
+  |----------------------|--------------------------------|
+  | 0x01                 | DTC Setting ON (Enable)        |
+  | 0x02                 | DTC Setting OFF (Disable)      |
+
+  | suppress_response (SPR Bit) | Use Case                                                 |
+  |-----------------------------|----------------------------------------------------------|
+  | 1                           | Suppresses the ECU's positive response (Adds 0x80)       |
+  | 0                           | Default. Requires the ECU to send a response             |
+  */
+  int ret_status = 0;
+  byte diag_request_byte[2];
+  
+  diag_request_byte[0] = 0x85;
+  
+  // Apply the Suppress Positive Response (SPR) bit dynamically
+  if (suppress_response == 1) 
+  {
+    diag_request_byte[1] = dtc_setting + 0x80; 
+  }
+  else 
+  {
+    diag_request_byte[1] = dtc_setting;
+  }
+  
+  ret_status = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, elCount(diag_request_byte));
+  return ret_status;
+}
+
+void verify_dtc_avl_via_status_mask(dword DTC_Number, byte request_statusMask, byte expected_statusMask)
+{
+  /* Function: verify_dtc_avl_via_status_mask
+  Description: UDS Service 0x19 0x02 (Read DTC by Status Mask) with built-in verification.
+  Requests DTCs matching the `request_statusMask`, searches the ECU response for the specific `DTC_Number`, and verifies its status against `expected_statusMask`.
+  
+  Dynamic Parameters:
+  - DTC_Number: The 3-byte DTC hex value to search for (e.g., 0x930011).
+  - request_statusMask: The mask sent to the ECU to filter the list. (Use 0xFF to request ALL DTCs).
+  - expected_statusMask: The specific bit(s) that MUST be set for this DTC to pass the test.
+
+  | Common Status Mask Bits       | Hex Value |
+  |-------------------------------|-----------|
+  | TestFailed                    | 0x01      |
+  | PendingDTC                    | 0x04      |
+  | ConfirmedDTC                  | 0x08      |
+  | All Statuses (Request Only)   | 0xFF      |
+
+  Execution Context:
+  This is a VERIFICATION wrapper. It internally generates the CANoe test report (Pass/Fail). Call this directly when the test specification asks to "Verify", "Check", or "Validate" a DTC's status. Do not wrap it in an if-statement.
+  */
+  
+  int ret_check = 0;
+  int i = 0;
+  int dtc_found = 0;
+  byte diag_response_byte[1024];
+  byte diag_request_byte[3];
+  
+  byte DtcThirdByte;
+  byte DtcSecondByte;
+  byte DtcFirstByte;
+  
+  DtcThirdByte = (DTC_Number >> 16) & 0xFF;
+  DtcSecondByte = (DTC_Number >> 8) & 0xFF;
+  DtcFirstByte = DTC_Number & 0xFF;
+  
+  // Send Read DTC by status Mask
+  diag_request_byte[0] = 0x19;
+  diag_request_byte[1] = 0x02;
+  diag_request_byte[2] = request_statusMask;
+  ret_check = DiagRequest_via_bytes_WithFixedLengthReturnType(diag_request_obj, diag_request_byte, elcount(diag_request_byte));
+  if(ret_check == 1)
+  {
+    UDS_Response(diag_request_obj, diag_response_byte);
+    for(i=3; i < elcount(diag_response_byte); i+=4)
+    {
+      if(diag_response_byte[i] == DtcThirdByte && diag_response_byte[i+1] == DtcSecondByte && diag_response_byte[i+2] == DtcFirstByte)
+      {
+        if((diag_response_byte[i+3] & expected_statusMask) == 1)
+        {
+          testStepPass("Response Received", "Expected DTC is available and Status Mask is matching.");
+        }
+        else
+        {
+          testStepFail("Response Received", "Expected DTC is available and Status Mask is not matching.");
+        }
+        dtc_found = 1;
+      }
+    }
+    if(dtc_found == 0)
+    {
+      testStepFail("Response Received", "Expected DTC is not available in the response.");
+    }
+  }
+}

@@ -1,0 +1,243 @@
+/*@!Encoding:1252*/
+void Inject_Comms_Fault(char PDU_Name[], char Fault_Type[], char Signal_name[], int invalid_value)
+{
+  /* Function: Inject_Comms_Fault
+  Description: Master routing engine for injecting Network Communication (Comms) faults.
+  
+  | Fault_Type (Exact String) | Fault Action                                      | Required Parameters                 |
+  |---------------------------|---------------------------------------------------|-------------------------------------|
+  | "TIMEOUT"                 | Drops the PDU entirely                            | PDU_Name                            |
+  | "E2E_CRC"                 | Corrupts the PDU's checksum                       | PDU_Name                            |
+  | "E2E_SQC"                 | Freezes/corrupts the PDU Sequence Counter         | PDU_Name                            |
+  | "E2E_DLC"                 | Manipulates the Data Length Code (DLC) to 1       | PDU_Name                            |
+  | "SIGNAL"                  | Injects an invalid integer into a specific signal | Signal_name, invalid_value          |
+  | "GLOBAL_TIMEOUT"          | Drops ALL predefined TX nodes (Global Action)     | None (Uses Global Environment)      |
+
+  Execution Context (COMPILER SAFETY RULE):
+  This function strictly requires 4 parameters. You MUST pass dummy values for the parameters that your selected `Fault_Type` does not use.
+  
+  Dummy Variable Guide:
+  - Unused String (PDU or Signal): Pass `""`
+  - Unused Integer (invalid_value): Pass `0`
+
+  Examples:
+  1. CRC Fault: `Inject_Comms_Fault("Engine_Data_PDU", "E2E_CRC", "", 0);`
+  2. Global Timeout: `Inject_Comms_Fault("", "GLOBAL_TIMEOUT", "", 0);`
+  */
+  int i = 0;
+  if(strstr(Fault_Type, "TIMEOUT") != -1)
+  {
+    // "Timeout" fault
+    teststep("Fault Injection", "Inject Timeout Fault");
+    teststep("Disable PDU", "%s", PDU_Name);
+    if(0 == testDisableMsg(PDU_Name))
+    {
+      testStep("PDU Name", "PDU has been disabled");
+    }
+    else
+    {
+      teststep("PDU Name", "PDU has not been disabled");
+    }
+  }
+  else if(strstr(Fault_Type, "E2E_CRC") != -1)
+  {
+    // "E2E" fault via checksum corruption
+    teststep("Fault Injection", "Inject E2E Fault - Checksum");
+    teststep("Disable CRC Calculation for PDU", "%s", PDU_Name);
+    if(0 == testDisableCRCCalculation(PDU_Name))
+    {
+      testStep("PDU Name", "CRC calculation for PDU has been disabled");
+    }
+    else
+    {
+      teststep("PDU Name", "CRC calculation for PDU has not been disabled");
+    }
+  }
+  else if(strstr(Fault_Type, "E2E_SQC") != -1)
+  {
+    // "E2E" fault via sequence counter corruption
+    teststep("Fault Injection", "Inject E2E Fault - Sequence Counter");
+    teststep("Disable Sequence counter Calculation for PDU", "%s", PDU_Name);
+    if(0 == testDisableMsgSequenceCounter(PDU_Name))
+    {
+      testStep("PDU Name", "Sequence Counter (SQC) for PDU has been disabled");
+    }
+    else
+    {
+      teststep("PDU Name", "Sequence Counter (SQC) for PDU has not been disabled");
+    }
+  }
+  else if(strstr(Fault_Type, "E2E_DLC") != -1)
+  {
+    // "E2E" fault via DLC manipulation
+    teststep("Fault Injection", "Inject E2E Fault - DLC manipulation");
+    teststep("Set invalid message length to PDU", "%s", PDU_Name);
+    if(0 == testSetMsgDlc(PDU_Name, 1))
+    {
+      teststep("PDU Name", "Length for PDU has been changed");
+    }
+    else
+    {
+      teststep("PDU Name", "Length for PDU has not been changed");
+    }
+  }
+  else if(strstr(Fault_Type, "SIGNAL") != -1)
+  {
+    // "SIGNAL" fault via invalid value
+    teststep("Fault Injection", "Inject Signal Fault");
+    teststep("Set Invalid value to Signal", "Signal Name - %s and Invalid Value - %d", Signal_name, invalid_value);
+    if(0 == setRawSignal(Signal_name, invalid_value))
+    {
+      teststep("Signal Name", "Signal %s has been set with invalid value.", Signal_name);
+    }
+    else
+    {
+      teststep("Signal Name", "Signal %s has not been set with invalid value.", Signal_name);
+    }
+  }
+  else if(strstr(Fault_Type, "GLOBAL_TIMEOUT") != -1)
+  {
+    // "Global Timeout" fault via disabling all Tx nodes from the global Tx_node_names array
+    teststep("Fault Injection", "Inject Global Timeout Fault");
+    teststep("Disable TX Nodes", "All predefined Tx Node Names");
+    
+    // Uses the globally defined Tx_node_names[][] array
+    for(i = 0; i < elcount(Tx_ECU_Node_Names); i++)
+    {
+      if(0 == testDisableMsgAllTx(Tx_ECU_Node_Names[i]))
+      {
+        teststep("Node Name", "All Tx messages from node %s have been disabled.", Tx_ECU_Node_Names[i]);
+      }
+      else
+      {
+        teststep("Node Name", "All Tx messages from node %s have not been disabled.", Tx_ECU_Node_Names[i]);
+      }
+    }
+  }
+  else
+  {
+    teststep("Fault Injection", "Fault injection method has not defined in the function.");
+  }
+}
+
+void Remove_Comms_Fault(char PDU_Name[], char Fault_Type[], char Signal_name[], int Valid_value)
+{
+  /* Function: Remove_Comms_Fault
+  Description: Master routing engine for recovering from Network Communication (Comms) faults and restoring the CAN bus to a nominal state.
+  
+  | Fault_Type (Exact String) | Recovery Action                                   | Required Parameters                 |
+  |---------------------------|---------------------------------------------------|-------------------------------------|
+  | "TIMEOUT"                 | Re-enables the previously dropped PDU             | PDU_Name                            |
+  | "E2E_CRC"                 | Re-enables the PDU's checksum calculation         | PDU_Name                            |
+  | "E2E_SQC"                 | Re-enables the PDU Sequence Counter calculation   | PDU_Name                            |
+  | "E2E_DLC"                 | Restores the Data Length Code (DLC) to original   | PDU_Name                            |
+  | "SIGNAL"                  | Restores a specific signal to a valid integer     | Signal_name, Valid_value            |
+  | "GLOBAL_TIMEOUT"          | Re-enables ALL predefined TX nodes (Global Action)| None (Uses Global Environment)      |
+
+  Execution Context (TEST LIFECYCLE & COMPILER SAFETY):
+  1. TEARDOWN RULE: If you inject a comms fault in a test case, you MUST call this recovery function at the end of the test case to restore the network.
+  2. DUMMY VARIABLES: This function strictly requires 4 parameters. You MUST pass dummy values for the parameters that your selected `Fault_Type` does not use.
+  
+  Dummy Variable Guide:
+  - Unused String (PDU or Signal): Pass `""`
+  - Unused Integer (Valid_value): Pass `0`
+
+  Examples:
+  1. Recover CRC Fault: `Remove_Comms_Fault("Engine_Data_PDU", "E2E_CRC", "", 0);`
+  2. Recover Global Timeout: `Remove_Comms_Fault("", "GLOBAL_TIMEOUT", "", 0);`
+  */
+  int i;
+  if(strstr(Fault_Type, "TIMEOUT") != -1)
+  {
+    // "TIMEOUT" Fault
+    teststep("Fault Removal", "Remove Timeout Fault");
+    teststep("Enable PDU", "%s", PDU_Name);
+    if(0 == testEnableMsg(PDU_Name))
+    {
+      testStep("PDU Name", "PDU has been enabled");
+    }
+    else
+    {
+      teststep("PDU Name", "PDU has not been enabled");
+    }
+  }
+  else if(strstr(Fault_Type, "E2E_CRC") != -1)
+  {
+    // "E2E" fault via checksum corruption
+    teststep("Fault Removal", "Remove E2E Fault - Checksum");
+    teststep("Enable CRC Calculation for PDU", "%s", PDU_Name);
+    if(0 == testEnableCRCCalculation(PDU_Name))
+    {
+      testStep("PDU Name", "CRC calculation for PDU has been enabled");
+    }
+    else
+    {
+      teststep("PDU Name", "CRC calculation for PDU has not been enabled");
+    }
+  }
+  else if(strstr(Fault_Type, "E2E_SQC") != -1)
+  {
+    // "E2E" fault via Sequence counter corruption
+    teststep("Fault Removal", "Remove E2E Fault - Sequence Counter");
+    teststep("Enable Sequence counter Calculation for PDU", "%s", PDU_Name);
+    if(0 == testEnableMsgSequenceCounter(PDU_Name))
+    {
+      testStep("PDU Name", "Sequence Counter (SQC) for PDU has been enabled");
+    }
+    else
+    {
+      teststep("PDU Name", "Sequence Counter (SQC) for PDU has not been enabled");
+    }
+  }
+  else if(strstr(Fault_Type, "E2E_DLC") != -1)
+  {
+    // "E2E" fault via DLC manipulation
+    teststep("Fault Removal", "Remove E2E Fault - DLC manipulation");
+    teststep("Reset message length to its original PDU length", "%s", PDU_Name);
+    if(0 == testResetMsgDlc(PDU_Name))
+    {
+      teststep("PDU Name", "Length for PDU has been changed to its Original");
+    }
+    else
+    {
+      teststep("PDU Name", "Length for PDU has not been changed to its Original");
+    }
+  }
+  else if(strstr(Fault_Type, "SIGNAL") != -1)
+  {
+    // "SIGNAL" fault via invalid value
+    teststep("Fault Removal", "Remove Signal Fault");
+    teststep("Set valid value to Signal", "Signal Name - %s and Valid Value - %d", Signal_name, Valid_value);
+    if(0 == setRawSignal(Signal_name, Valid_value))
+    {
+      teststep("Signal Name", "Signal %s has been set with valid value.", Signal_name);
+    }
+    else
+    {
+      teststep("Signal Name", "Signal %s has not been set with valid value.", Signal_name);
+    }
+  }
+  else if(strstr(Fault_Type, "GLOBAL_TIMEOUT") != -1)
+  {
+    // "Global Timeout" removal via enabling all Tx nodes from the global array
+    teststep("Fault Removal", "Remove Global Timeout Fault");
+    teststep("Enable TX Nodes", "All predefined Tx Node Names");
+    
+    // Uses the globally defined Tx_ECU_Node_Names[][] array
+    for(i = 0; i < elcount(Tx_ECU_Node_Names); i++)
+    {
+      if(0 == testEnableMsgAllTx(Tx_ECU_Node_Names[i]))
+      {
+        teststep("Node Name", "All Tx messages from node %s have been enabled.", Tx_ECU_Node_Names[i]);
+      }
+      else
+      {
+        teststep("Node Name", "All Tx messages from node %s have not been enabled.", Tx_ECU_Node_Names[i]);
+      }
+    }
+  }
+  else
+  {
+    teststep("Fault Injection", "Fault injection method has not defined in the function.");
+  }
+}

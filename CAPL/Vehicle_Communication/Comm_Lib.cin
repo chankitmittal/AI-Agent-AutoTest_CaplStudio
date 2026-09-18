@@ -1,0 +1,196 @@
+/*@!Encoding:1252*/
+void Check_signal_value_long_type(char signal_name[], sysvarInt * sysvar_name, long input_values[], long expected_values[])
+{
+  /* Function: Check_signal_value_long_type
+  Description: Performs a data-driven validation of a CAN/LIN signal range. 
+  Automates the setup of logging, executes a series of value injections, and performs Pass/Fail comparisons.
+  
+  Execution Context (LOGGING WARNING):
+  1. This function manages its own Logging lifecycle (start/stop).
+  2. DO NOT call this function multiple times within the SAME testcase. If you have multiple signals to test, create separate testcase functions for each.
+  3. The `sysvar_name` parameter must use the `sysvar::...` syntax directly from the System Variable explorer.
+  */
+  
+  int i = 0;
+  long sysvar_value;
+  char log_file_name[255] = "";
+  char test_title[255] = "";
+  
+  snprintf(test_title, elcount(test_title), "%s - Signal Range Test", signal_name);
+  snprintf(log_file_name, elcount(log_file_name), "%s_signal_Test.mdf", signal_name);
+  
+  setLogFileName(log_file_name);
+  startLogging();
+  
+  testCaseTitle("Test Case", test_title);
+  testCaseDescription("Checks signal boundaries (min, mid, max) and invalid values.");
+  testStep("Signal Name", "%s", signal_name);
+  
+  for(i = 0; i < elcount(input_values); i++)
+  {
+    setRawSignal(signal_name, input_values[i]);
+    testWaitForSysVar(sysvar_name, 2000);
+    sysvar_value = sysGetVariableLong(sysvar_name);
+    
+    if(expected_values[i] == sysvar_value)
+    {
+      testStepPass("Value Comparison", "Expected: %d | Received: %d", expected_values[i], sysvar_value);
+    }
+    else
+    {
+      testStepFail("Value Comparison", "Expected: %d | Received: %d (Mismatch)", expected_values[i], sysvar_value);
+    }
+  }
+  
+  stopLogging();
+  testWaitForTimeoutSilent(2000);
+}
+
+void Check_signal_value_float_type(char signal_name[], sysvarFloat * sysvar_name, long input_values[], float expected_values[])
+{
+  /* Function: Check_signal_value_float_type
+  Description: Performs a data-driven validation of CAN/LIN signals that require physical floating-point representation. Includes epsilon-based precision comparison to prevent rounding errors.
+  
+  Execution Context (LOGGING & PRECISION WARNING):
+  1. LOGGING: Manages its own logging (start/stop). DO NOT call multiple times per testcase.
+  2. PRECISION: Uses `elipson_value = 0.001` for comparison. Ensure your expected_values are defined with sufficient floating-point precision.
+  3. SYSVAR SYNTAX: The `sysvar_name` parameter must use the `sysvar::...` syntax.
+  */
+  
+  int i = 0;
+  float sysvar_value;
+  float elipson_value = 0.001; // Comparison threshold for float equality
+  char log_file_name[255] = "";
+  char test_title[255] = "";
+  
+  snprintf(test_title, elcount(test_title), "%s - Signal Range Test", signal_name);
+  snprintf(log_file_name, elcount(log_file_name), "%s_signal_Test.mdf", signal_name);
+  
+  setLogFileName(log_file_name);
+  startLogging();
+  
+  testCaseTitle("Test Case", test_title);
+  testCaseDescription("Checks signal physical range using epsilon-based precision comparison.");
+  testStep("Signal Name", "%s", signal_name);
+  
+  for(i = 0; i < elcount(input_values); i++)
+  {
+    setRawSignal(signal_name, input_values[i]);
+    testWaitForSysVar(sysvar_name, 2000);
+    sysvar_value = sysGetVariableFloat(sysvar_name);
+    
+    // Epsilon comparison handles floating point rounding quirks
+    if(abs(expected_values[i] - sysvar_value) <= elipson_value)
+    {
+      testStepPass("Value Comparison", "Expected: %.3f | Received: %.3f (Pass)", expected_values[i], sysvar_value);
+    }
+    else
+    {
+      testStepFail("Value Comparison", "Expected: %.3f | Received: %.3f (Fail - Exceeds Epsilon)", expected_values[i], sysvar_value);
+    }
+  }
+  
+  stopLogging();
+  testWaitForTimeoutSilent(2000);
+}
+
+void check_signal_fault(char signal_name[], char fault_type[], int invalid_value, int valid_value, int debounce_time, int recovery_time, dword Expected_DTC)
+{
+  /* Function: check_signal_fault
+  Description: Validates signal fault lifecycle. Automatically handles DTC latch verification using bit-masking for TestFailed and TestFailedThisOperationCycle.
+  
+  Dynamic Parameters:
+  - Expected_DTC: The 3-byte DTC to monitor.
+  
+  Execution Context (VERIFICATION RULES):
+  1. MASK LOGIC: Internally calls `verify_dtc_avl_via_status_mask` using a constant mask representing [TestFailed | TestFailedThisOperationCycle].
+  2. LOGGING: Managed internally. Call once per testcase.
+  3. COMPILER SAFETY: Routes internally to injection/recovery engines using the required dummy values ("" and 0).
+  */
+  
+  // Constant mask: Bit 0 (TestFailed) | Bit 1 (TestFailedThisOperationCycle) = 0x03
+  const byte CONSTANT_FAULT_MASK = 0x03; 
+  const byte CONSTANT_HEALED_MASK = 0x02; // Example: TestFailedThisOperationCycle only
+  
+  char log_file_name[255];
+  char test_title[255];
+
+  snprintf(test_title, elcount(test_title), "%s_Signal_Fault_Lifecycle", signal_name);
+  snprintf(log_file_name, elcount(log_file_name), "%s_Test.mdf", test_title);
+  
+  setLogFileName(log_file_name);
+  startLogging();
+  
+  testCaseTitle("Test Case", test_title);
+  testCaseDescription("Lifecycle: Signal Fault, Bit-mask DTC Verification, and Recovery.");
+
+  // STAGE 1: Inject
+  teststep("Inject Fault", "%s - %s", fault_type, signal_name);
+  Inject_Comms_Fault("", fault_type, signal_name, invalid_value);
+  testWaitForTimeout(debounce_time);
+  
+  // Verify Fault Latch
+  verify_dtc_avl_via_status_mask(Expected_DTC, 0x03, CONSTANT_FAULT_MASK);
+
+  // STAGE 2: Remove
+  teststep("Remove Fault", "%s - %s", fault_type, signal_name);
+  Remove_Comms_Fault("", fault_type, signal_name, valid_value);
+  testWaitForTimeout(recovery_time);
+  
+  // Verify Recovery
+  verify_dtc_avl_via_status_mask(Expected_DTC, 0x02, CONSTANT_HEALED_MASK);
+  
+  stopLogging();
+  testWaitForTimeoutSilent(2000);
+}
+
+void check_message_fault(char pdu_name[], char fault_type[], int debounce_time, int recovery_time, dword Expected_DTC)
+{
+  /* Function: check_message_fault
+  Description: Validates PDU-level fault lifecycle. Automates injection, debouncing, DTC verification (TestFailed & TestFailedThisOperationCycle), and healing.
+  
+  Dynamic Parameters:
+  - pdu_name: The PDU identifier.
+  - fault_type: "TIMEOUT", "E2E_CRC", "E2E_SQC", or "E2E_DLC".
+  - Expected_DTC: The 3-byte DTC to monitor for this PDU fault.
+  
+  Execution Context (VERIFICATION RULES):
+  1. DTC MASK: Uses standard fault masks (Active=0x03, Healed=0x02) to verify latching behavior.
+  2. LOGGING: Managed internally. Call once per testcase.
+  3. ROUTING: Routes internally to `Inject_Comms_Fault` and `Remove_Comms_Fault` with required dummy values ("", 0).
+  */
+  
+  const byte MASK_ACTIVE_FAULT = 0x03; 
+  const byte MASK_HEALED_STATE   = 0x02; 
+  
+  char log_file_name[255];
+  char test_title[255];
+
+  snprintf(test_title, elcount(test_title), "%s_%s_Lifecycle", pdu_name, fault_type);
+  snprintf(log_file_name, elcount(log_file_name), "%s_Test.mdf", test_title);
+  
+  setLogFileName(log_file_name);
+  startLogging();
+  
+  testCaseTitle("Test Case", test_title);
+  testCaseDescription("Lifecycle: PDU Fault Injection, DTC Latching, and Recovery.");
+  
+  // STAGE 1: Inject Fault
+  teststep("Inject Fault", "%s - %s", fault_type, pdu_name);
+  Inject_Comms_Fault(pdu_name, fault_type, "", 0);
+  testWaitForTimeout(debounce_time);
+  
+  // Verify Fault Latch
+  verify_dtc_avl_via_status_mask(Expected_DTC, 0x03, MASK_ACTIVE_FAULT);
+  
+  // STAGE 2: Remove Fault
+  teststep("Remove Fault", "%s - %s", fault_type, pdu_name);
+  Remove_Comms_Fault(pdu_name, fault_type, "", 0);
+  testWaitForTimeout(recovery_time);
+  
+  // Verify Recovery
+  verify_dtc_avl_via_status_mask(Expected_DTC, 0x02, MASK_HEALED_STATE);
+  
+  stopLogging();
+  testWaitForTimeoutSilent(2000);
+}

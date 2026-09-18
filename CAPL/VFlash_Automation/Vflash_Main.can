@@ -1,0 +1,93 @@
+/*@!Encoding:1252*/
+includes
+{
+  #include "VFlash_Utilities.cin"
+  #include "Global_Variables.cin"
+  #include "Diag_Lib.cin"
+}
+
+/* ====================================================================
+FEW-SHOT EXAMPLES: HOW TO WRITE TEST CASES
+Use these structural examples as the absolute gold standard when generating CAPL test cases for the user.
+====================================================================
+*/
+
+testcase Single_flash_test()
+{
+  /* 
+    VflashPack Name: "temp_flashpack_name.vflashpack"
+    Maximum Flash duration: 300s
+  */
+  singleTimeFlash("temp_flashpack_name.vflashpack", 300);
+}
+
+testcase multi_flash_test()
+{
+  /* 
+    VflashPack Name: "temp_flashpack_name.vflashpack"
+    Flash times: 10
+    Maximum Flash duration: 300s
+  */
+  MultiTimeFlash("temp_flashpack_name.vflashpack", 10, 300);
+}
+
+testcase flash_corrupt_signature_test()
+{
+  /* 
+    VflashPack Name: "temp_flashpack_name.vflashpack"
+    Expected corruption reason: "Signature"
+  */
+  Flash_corrupted_SW("temp_flashpack_name_signature_corrupt.vflashpack", "Signature");
+}
+
+testcase flash_corrupt_checksum_test()
+{
+  /* 
+    VflashPack Name: "temp_flashpack_name.vflashpack"
+    Expected corruption reason: "Checksum"
+  */
+  Flash_corrupted_SW("temp_flashpack_name_checksum_corrupt.vflashpack", "Checksum");
+}
+
+testcase read_diagnostic_service_test()
+{
+  /*
+  Diagnostic service test - ECU Identification
+  */
+  DiagRequest_via_object(read_ecu_identification);
+  /*
+  Diagnostic service test - Serial Number
+  */
+  DiagRequest_via_object(read_serial_number);
+}
+
+testcase appl_to_reprogramming_session()
+{
+  default_session();
+  testWaitForTimeout(1000); // ALWAYS use testWaitForTimeout for delays
+  extended_session();
+  testWaitForTimeout(1000);
+  programming_session();
+}
+
+testcase reprogramming_to_appl_session()
+{
+  default_session();
+  testWaitForTimeout(1000);
+  extended_session();
+  testWaitForTimeout(1000);
+  programming_session();
+  testWaitForTimeout(1000);
+  extended_session();
+}
+
+void MainTest ()
+{
+  Single_flash_test();
+  multi_flash_test();
+  flash_corrupt_signature_test();
+  flash_corrupt_checksum_test();
+  read_diagnostic_service_test();
+  appl_to_reprogramming_session();
+  reprogramming_to_appl_session();
+}

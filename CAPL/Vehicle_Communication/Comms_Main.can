@@ -1,0 +1,100 @@
+/*@!Encoding:1252*/
+includes
+{
+  #include "Comms_Fault_Lib.cin"
+  #include "Diag_Lib.cin"
+  #include "Global_Variables.cin"
+  #include "Comm_Lib.cin"
+}
+
+
+testcase PDU_AccelGravityLatitude_timeout_test()
+{
+  // PDU Name - "PDU_AccelGravityLatitude"
+  // Fault type - "TIMEOUT"
+  // debounce time - 6000 ms
+  // recovery time - 3000 ms
+  // DTC Number - 0x535353
+  check_message_fault("PDU_AccelGravityLatitude", "TIMEOUT", 6000, 3000, 0x535353);
+}
+
+testcase PDU_AccelGravityLatitude_crc_test()
+{
+  // PDU Name - "PDU_AccelGravityLatitude"
+  // Fault type - "E2E_CRC"
+  // debounce time - 6000 ms
+  // recovery time - 3000 ms
+  // DTC Number - 0x535353
+  check_message_fault("PDU_AccelGravityLatitude", "E2E_CRC", 6000, 3000, 0x535353);
+}
+
+testcase PDU_AccelGravityLatitude_sqc_test()
+{
+  // PDU Name - "PDU_AccelGravityLatitude"
+  // Fault type - "E2E_SQC"
+  // debounce time - 6000 ms
+  // recovery time - 3000 ms
+  // DTC Number - 0x535353
+  check_message_fault("PDU_AccelGravityLatitude", "E2E_SQC", 6000, 3000, 0x535353);
+}
+
+testcase PDU_AccelGravityLatitude_dlc_test()
+{
+  // PDU Name - "PDU_AccelGravityLatitude"
+  // Fault type - "E2E_DLC"
+  // debounce time - 6000 ms
+  // recovery time - 3000 ms
+  // DTC Number - 0x535353
+  check_message_fault("PDU_AccelGravityLatitude", "E2E_DLC", 6000, 3000, 0x535353);
+}
+
+testcase signal_range_raw_test_AccelGravityLatitude()
+{
+  // Signal Name - "AccelGravityLatitude"
+  // Factor: 0.002 ; Offset: -65 
+  // Raw min: 0 ; Raw max: 65535
+  // 65535: INVLD value
+  // Interface type: Raw
+  // Interface Name: "sysvar::Comm::RTE_AccelGravityLatitude_raw_name"
+  long input_values[4] = {0, 32767, 65534, 65535};
+  long expected_values[4] = {0, 32767, 65534, 65535};
+  Check_signal_value_long_type("AccelGravityLatitude", sysvar::Comm::RTE_AccelGravityLatitude_raw_name, input_values, expected_values);
+}
+
+testcase signal_range_phy_test_AccelGravityLatitude()
+{
+  // Signal Name - "AccelGravityLatitude"
+  // Factor: 0.002 ; Offset: -65 
+  // Raw min: 0 ; Raw max: 65535
+  // 65535: INVLD value
+  // Interface type: Phy
+  // Interface Name: "sysvar::Comm::RTE_AccelGravityLatitude_phy_name"
+  long input_values[4] = {0, 32767, 65534, 65535};
+  float expected_values[4] = {-65, 0, 66.0, 0.0};
+  Check_signal_value_float_type("AccelGravityLatitude", sysvar::Comm::RTE_AccelGravityLatitude_phy_name, input_values, expected_values);
+}
+
+testcase SIGNAL_AccelGravityLatitude_signal_test()
+{
+  // Signal Name - "AccelGravityLatitude"
+  // Factor: 0.002 ; Offset: -65 
+  // Raw min: 0 ; Raw max: 65535
+  // 65535: INVLD value
+  // Fault type - "SIGNAL"
+  // debounce time - 6000 ms
+  // recovery time - 3000 ms
+  // DTC number - 0xFF2233
+  check_signal_fault("AccelGravityLatitude", "SIGNAL", 65535, 32767, 6000, 3000, 0xFF2233);
+}
+
+void MainTest ()
+{
+  PDU_AccelGravityLatitude_timeout_test();
+  PDU_AccelGravityLatitude_crc_test();
+  PDU_AccelGravityLatitude_sqc_test();
+  PDU_AccelGravityLatitude_dlc_test();
+  signal_range_raw_test_AccelGravityLatitude();
+  signal_range_phy_test_AccelGravityLatitude();
+  SIGNAL_AccelGravityLatitude_signal_test();
+}
+

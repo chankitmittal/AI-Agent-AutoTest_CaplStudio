@@ -1,0 +1,131 @@
+/*@!Encoding:1252*/
+includes
+{
+  #include "Diag_Lib.cin"
+  #include "Global_Variables.cin"
+  #include "Comms_Fault_Lib.cin"
+}
+
+void fault_lifecycle_sequence(dword DTC_Number, char PDU_Name[], char Fault_Type[], char Signal_name[], int invalid_value, int valid_value, int aging_cycle_counter)
+{
+  /* Function: fault_lifecycle_sequence
+  Description: MASTER DTC LIFECYCLE ENGINE. Automates an entire fault validation suite: initial injection, healing, re-injection, snapshot verification, aging cycles (Hard Resets), and NVRAM memory retention checks.
+  
+  Dynamic Parameters:
+  - DTC_Number: The 3-byte hexadecimal DTC to monitor (e.g., 0x123456).
+  - PDU_Name: The network message to fault (pass "" if unused).
+  - Fault_Type: The exact string fault method ("TIMEOUT", "E2E_CRC", "E2E_SQC", "E2E_DLC", "SIGNAL", "GLOBAL_TIMEOUT").
+  - Signal_name: The target signal (pass "" if unused).
+  - invalid_value: The integer to trigger the fault (pass 0 if unused).
+  - valid_value: The integer to heal the fault (pass 0 if unused).
+  - aging_cycle_counter: The number of hard resets required to clear the DTC from history (usually 40).
+
+  Execution Context (LIFECYCLE TRIGGER):
+  1. USE CASE: Call this wrapper ONLY when the test specification asks for a "Full DTC Lifecycle Test", "Aging Cycle Validation", or "DTC Memory Retention check". Do NOT use this for simple, one-off fault injections.
+  2. DUMMY VARIABLES: Because this routes to `Inject_Comms_Fault`, you MUST pass `""` and `0` for parameters not required by your chosen `Fault_Type`.
+  3. BLOCKING: This function contains extensive internal timeouts (`testWaitForTimeout`) and resets. Call it exactly once per test case.
+  
+  Example (Testing a Global Timeout Lifecycle with 40 aging cycles):
+  fault_lifecycle_sequence(0x930011, "", "GLOBAL_TIMEOUT", "", 0, 0, 40);
+  */
+  
+  int i = 0;
+  
+  // Read all Pending and confirmed DTCs available in the test environment
+  readDtcInformationWithStatusMask(0x02, 0x0C);
+  // Clear all DTCs
+  clear_Diagnostic_information(0xFFFFFF);
+  // Read all supported DTCs in the project
+  readDtcInformationWithSubFuncOnly(0x0A);
+  // Read Extended DTC status before inducing the DTC and Verify status Mask is 0x00
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF);
+  
+  // [1st INJECTION]
+  Inject_Comms_Fault(PDU_Name, Fault_Type, Signal_name, invalid_value);
+  testWaitForTimeout(10000);
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF); // Expect 0xY9
+  readDtcInformationWithDtcAndRecord(0x04, DTC_Number, 0xFF); // Snapshot check
+  
+  // [1st HEALING]
+  Remove_Comms_Fault(PDU_Name, Fault_Type, Signal_name, valid_value);
+  testWaitForTimeout(10000);
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF); // Expect 0xY8
+  readDtcInformationWithDtcAndRecord(0x04, DTC_Number, 0xFF); // Snapshot check
+  
+  // [2nd INJECTION]
+  Inject_Comms_Fault(PDU_Name, Fault_Type, Signal_name, invalid_value);
+  testWaitForTimeout(10000);
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF); // Expect 0xY9, Freq -> 2
+  readDtcInformationWithDtcAndRecord(0x04, DTC_Number, 0xFF); // Snapshot different
+  
+  // [2nd HEALING]
+  Remove_Comms_Fault(PDU_Name, Fault_Type, Signal_name, valid_value);
+  testWaitForTimeout(10000);
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF); // Expect 0xY8, Freq -> 2
+  readDtcInformationWithDtcAndRecord(0x04, DTC_Number, 0xFF); // Snapshot different
+  
+  // [AGING CYCLES]
+  for(i = 0; i < aging_cycle_counter; i++)
+  {
+    hard_reset();
+    testWaitForTimeoutSilent(4000);
+  }
+  
+  // [AGING VERIFICATION]
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF); // Expect 0x50
+  readDtcInformationWithDtcAndRecord(0x04, DTC_Number, 0xFF); // Expect no record
+  
+  // [MEMORY RETENTION CHECK]
+  Inject_Comms_Fault(PDU_Name, Fault_Type, Signal_name, invalid_value);
+  testWaitForTimeout(10000);
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF); // Expect 0xY9
+  
+  hard_reset();
+  testWaitForTimeoutSilent(4000);
+  
+  readDtcInformationWithDtcAndRecord(0x06, DTC_Number, 0xFF); // Expect 0xY9 (Retained across reset)
+}
+
+
+/* ====================================================================
+FEW-SHOT EXAMPLES: NETWORK FAULT LIFECYCLE TESTS
+Use these structural examples when the user asks to generate test cases 
+for Communication Faults (Timeouts, CRC, Sequence Counters, etc.).
+Ensure every test case includes a Title and Description for the HTML report.
+====================================================================
+*/
+
+// Example 1: PDU Timeout Fault Lifecycle
+testcase PDU_AccelGravityLatitude_Timeout_Fault()
+{
+  testCaseTitle("TC - Timeout", "PDU - PDU_AccelGravityLatitude");
+  testCaseDescription("This testcase verifies the complete fault cycle for the PDU timeout fault.");
+  
+  // Note the use of dummy variables ("" and 0) for unused parameters
+  fault_lifecycle_sequence(0x523487, "PDU_AccelGravityLatitude", "TIMEOUT", "", 0, 0, 40);
+}
+
+// Example 2: E2E Checksum (CRC) Fault Lifecycle
+testcase PDU_AccelGravityLatitude_e2e_crc_Fault()
+{
+  testCaseTitle("TC - E2E CRC", "PDU - PDU_AccelGravityLatitude");
+  testCaseDescription("This testcase verifies the complete fault cycle for the PDU checksum fault.");
+  
+  fault_lifecycle_sequence(0x523486, "PDU_AccelGravityLatitude", "E2E_CRC", "", 0, 0, 40);
+}
+
+// Example 3: E2E Sequence Counter (SQC) Fault Lifecycle
+testcase PDU_AccelGravityLatitude_e2e_sqc_Fault()
+{
+  testCaseTitle("TC - E2E SQC", "PDU - PDU_AccelGravityLatitude");
+  testCaseDescription("This testcase verifies the complete fault cycle for the PDU sequence counter fault.");
+  
+  fault_lifecycle_sequence(0x523486, "PDU_AccelGravityLatitude", "E2E_SQC", "", 0, 0, 40);
+}
+
+void MainTest ()
+{
+  PDU_AccelGravityLatitude_Timeout_Fault();
+  PDU_AccelGravityLatitude_e2e_crc_Fault();
+  PDU_AccelGravityLatitude_e2e_sqc_Fault();
+}
